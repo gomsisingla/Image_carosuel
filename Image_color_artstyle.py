@@ -1,3 +1,7 @@
+import os
+import shutil
+import tempfile
+import atexit
 from kivy.app import App
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.carousel import Carousel
@@ -7,13 +11,23 @@ from kivy.uix.label import Label
 from kivy.uix.button import Button
 from kivy.uix.scrollview import ScrollView
 from kivy.uix.gridlayout import GridLayout
-from kivy.uix.modalview import ModalView
 from plyer import filechooser
-import os
-from PIL import Image as PILImage, ImageEnhance, ImageFilter
+import cv2
+import numpy as np
+from PIL import Image as PILImage
 
 
 class ImageEditorApp(App):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        # Temporary directory for intermediate files
+        self.temp_dir = tempfile.mkdtemp()
+        atexit.register(self.cleanup_temp_files)  # Ensure cleanup on exit
+
+    def cleanup_temp_files(self):
+        """Clean up temporary files when the app exits."""
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
     def build(self):
         self.main_layout = BoxLayout(orientation="vertical")
 
@@ -23,7 +37,7 @@ class ImageEditorApp(App):
         self.main_layout.add_widget(add_images_button)
 
         # Main Image Carousel
-        self.carousel = Carousel(direction="right", size_hint=(1, 0.5))
+        self.carousel = Carousel(direction="right", size_hint=(1, 0.4))
         self.main_layout.add_widget(self.carousel)
 
         # Thumbnails Scroll View
@@ -33,17 +47,22 @@ class ImageEditorApp(App):
         self.scrollview.add_widget(self.thumbnail_layout)
         self.main_layout.add_widget(self.scrollview)
 
-        # Color Adjustment Sliders
-        self.color_controls = BoxLayout(orientation="horizontal", size_hint=(1, 0.15))
-        self.add_color_sliders()
-        self.main_layout.add_widget(self.color_controls)
-
         # Art Styles Scroll View
         self.style_scroll = ScrollView(size_hint=(1, 0.1), do_scroll_x=True, do_scroll_y=False)
         self.style_layout = GridLayout(cols=8, size_hint=(None, 1), spacing=10, padding=10)
         self.style_layout.bind(minimum_width=self.style_layout.setter("width"))
         self.style_scroll.add_widget(self.style_layout)
         self.main_layout.add_widget(self.style_scroll)
+
+        # Color Adjustment Sliders
+        self.color_controls = BoxLayout(orientation="horizontal", size_hint=(1, 0.15))
+        self.add_color_sliders()
+        self.main_layout.add_widget(self.color_controls)
+
+        # Save Image Button
+        save_image_button = Button(text="Save Image", size_hint=(1, 0.1))
+        save_image_button.bind(on_press=self.save_image)
+        self.main_layout.add_widget(save_image_button)
 
         # Track images
         self.image_paths = []  # Original image paths
@@ -89,41 +108,6 @@ class ImageEditorApp(App):
                     self.carousel.load_slide(widget)
                     break
 
-    def add_color_sliders(self):
-        self.brightness_slider = Slider(min=0.5, max=2.0, value=1.0, size_hint=(0.3, 1))
-        self.brightness_slider.bind(value=self.update_image)
-        self.color_controls.add_widget(Label(text="Brightness", size_hint=(0.2, 1)))
-        self.color_controls.add_widget(self.brightness_slider)
-
-        self.contrast_slider = Slider(min=0.5, max=2.0, value=1.0, size_hint=(0.3, 1))
-        self.contrast_slider.bind(value=self.update_image)
-        self.color_controls.add_widget(Label(text="Contrast", size_hint=(0.2, 1)))
-        self.color_controls.add_widget(self.contrast_slider)
-
-    def update_image(self, instance, value):
-        current_image = self.carousel.current_slide
-        if not current_image or not current_image.source:
-            return
-
-        original_path = next((k for k, v in self.modified_images.items() if v == current_image.source), None)
-        if not original_path:
-            return
-
-        pil_image = PILImage.open(original_path)
-
-        enhancer = ImageEnhance.Brightness(pil_image)
-        bright_image = enhancer.enhance(self.brightness_slider.value)
-
-        enhancer = ImageEnhance.Contrast(bright_image)
-        final_image = enhancer.enhance(self.contrast_slider.value)
-
-        updated_image_path = f"temp_adjusted_{os.path.basename(original_path)}"
-        final_image.save(updated_image_path)
-
-        current_image.source = updated_image_path
-        current_image.reload()
-        self.modified_images[original_path] = updated_image_path
-
     def add_art_style_buttons(self):
         for style in self.art_styles:
             button = Button(text=style, size_hint=(None, 1), width=150)
@@ -139,34 +123,143 @@ class ImageEditorApp(App):
         if not original_path:
             return
 
-        pil_image = PILImage.open(original_path)
+        img = cv2.imread(original_path)
+        if img is None:
+            return
 
+        # Apply style effects
         if style == "Original":
-            styled_image = pil_image
+            styled_image = img
         elif style == "Van Gogh":
-            styled_image = pil_image.filter(ImageFilter.EMBOSS)
+            styled_image = self.apply_van_gogh_effect(img)
         elif style == "Pop Art":
-            styled_image = pil_image.filter(ImageFilter.CONTOUR)
+            styled_image = self.apply_pop_art_effect(img)
         elif style == "Sketch":
-            styled_image = pil_image.convert("L").filter(ImageFilter.EDGE_ENHANCE)
+            styled_image = self.apply_sketch_effect(img)
         elif style == "Painting":
-            styled_image = pil_image.filter(ImageFilter.SMOOTH_MORE)
+            styled_image = self.apply_painting_effect(img)
         elif style == "Pointillism":
-            styled_image = pil_image.filter(ImageFilter.DETAIL)
+            styled_image = self.apply_pointillism_effect(img)
         elif style == "Surreal":
-            styled_image = pil_image.filter(ImageFilter.GaussianBlur(5))
+            styled_image = self.apply_surreal_effect(img)
         elif style == "Cubism":
-            styled_image = pil_image.filter(ImageFilter.FIND_EDGES)
-        else:
-            styled_image = pil_image
+            styled_image = self.apply_cubism_effect(img)
 
-        styled_image_path = f"temp_styled_{style}_{os.path.basename(original_path)}"
-        styled_image.save(styled_image_path)
+        # Save the styled image to the temporary directory
+        styled_image_path = os.path.join(self.temp_dir, f"styled_{style}_{os.path.basename(original_path)}")
+        cv2.imwrite(styled_image_path, styled_image)
+
+        # Update the carousel and tracking
+        current_image.source = styled_image_path
+        current_image.reload()
+        self.modified_images[original_path] = styled_image_path
+
+    def apply_van_gogh_effect(self, img):
+        return cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)  # Placeholder
+
+    def apply_pop_art_effect(self, img):
+        return cv2.cvtColor(img, cv2.COLOR_BGR2HSV)  # Placeholder
+
+    def apply_sketch_effect(self, img):
+        gray_img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        inverted_img = cv2.bitwise_not(gray_img)
+        blurred_img = cv2.GaussianBlur(inverted_img, (111, 111), 0)
+        return cv2.cvtColor(cv2.divide(gray_img, 255 - blurred_img, scale=256), cv2.COLOR_GRAY2BGR)
+
+    def apply_painting_effect(self, img):
+        return cv2.bilateralFilter(img, 9, 75, 75)
+
+    def apply_pointillism_effect(self, img):
+        output = np.zeros_like(img)
+        for y in range(0, img.shape[0], 5):
+            for x in range(0, img.shape[1], 5):
+                cv2.circle(output, (x, y), 3, img[y, x].tolist(), -1)
+        return output
+
+    def apply_surreal_effect(self, img):
+        return cv2.GaussianBlur(img, (15, 15), 2)
+
+    def apply_cubism_effect(self, img):
+        return cv2.Canny(img, 100, 200)
+
+    def add_color_sliders(self):
+        self.red_slider = Slider(min=0, max=255, value=255, size_hint=(0.25, 1))
+        self.red_slider.bind(value=self.update_image_rgb)
+        self.color_controls.add_widget(Label(text="Red", size_hint=(0.15, 1)))
+        self.color_controls.add_widget(self.red_slider)
+
+        self.green_slider = Slider(min=0, max=255, value=255, size_hint=(0.25, 1))
+        self.green_slider.bind(value=self.update_image_rgb)
+        self.color_controls.add_widget(Label(text="Green", size_hint=(0.15, 1)))
+        self.color_controls.add_widget(self.green_slider)
+
+        self.blue_slider = Slider(min=0, max=255, value=255, size_hint=(0.25, 1))
+        self.blue_slider.bind(value=self.update_image_rgb)
+        self.color_controls.add_widget(Label(text="Blue", size_hint=(0.15, 1)))
+        self.color_controls.add_widget(self.blue_slider)
+
+    def update_image_rgb(self, instance, value):
+        current_image = self.carousel.current_slide
+        if not current_image or not current_image.source:
+            return
+
+        original_path = next((k for k, v in self.modified_images.items() if v == current_image.source), None)
+        if not original_path:
+            return
+
+        pil_image = PILImage.open(original_path).convert("RGB")
+        r, g, b = pil_image.split()
+
+        red_adjust = r.point(lambda p: p * self.red_slider.value / 255)
+        green_adjust = g.point(lambda p: p * self.green_slider.value / 255)
+        blue_adjust = b.point(lambda p: p * self.blue_slider.value / 255)
+
+        final_image = PILImage.merge("RGB", (red_adjust, green_adjust, blue_adjust))
+        styled_image_path = os.path.join(self.temp_dir, f"color_adjust_{os.path.basename(original_path)}")
+        final_image.save(styled_image_path)
 
         current_image.source = styled_image_path
         current_image.reload()
         self.modified_images[original_path] = styled_image_path
 
+    def save_image(self, instance):
+        current_image = self.carousel.current_slide
+        if not current_image or not current_image.source:
+            return
+
+        filechooser.save_file(
+            filters=[("PNG Images", "*.png"), ("JPEG Images", "*.jpg;*.jpeg")],
+            on_selection=lambda paths: self.save_image_to_path(paths)
+        )
+
+    def save_image_to_path(self, paths):
+        if not paths:
+            return
+
+        output_path = paths[0]
+        current_image = self.carousel.current_slide
+
+        # Get the current displayed image path
+        source_path = current_image.source
+        try:
+            img = cv2.imread(source_path)
+            if img is None:
+                print("Error reading the current image.")
+                return
+
+            file_extension = os.path.splitext(output_path)[1].lower()
+            print(file_extension)
+            if not file_extension:  # No extension provided
+                output_path += ".jpg" # Default to JPG
+                file_extension= ".jpg"
+
+            if file_extension in ['.png', '.jpg', '.jpeg',]:
+                cv2.imwrite(output_path, img)
+                print(f"Image saved to {output_path}")
+            else:
+                print("Unsupported file format!")
+        except Exception as e:
+            print(f"Error saving image: {e}")
 
 if __name__ == "__main__":
     ImageEditorApp().run()
